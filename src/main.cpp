@@ -307,7 +307,7 @@ void readGyro(Mode current_mode) {
     data.delta_z = 0;
     data.filtered_positive_delta_index = 1;
     data.positive_delta_index = -1;
-    data.angles_index = 0;
+    data.angles_index = -1;
     
     recorded_gesture.compare_index = 0;
     recorded_gesture.next_index = 0;
