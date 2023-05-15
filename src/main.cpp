@@ -62,11 +62,13 @@ enum Mode {
 bool show_reading_indicator = false;
 Thread reading_led_indicator_thread;
 
-#define SENSING_TIMEFRAME 4000  // number of seconds that gyroscope will sense gesture
-const int32_t STABILITY_TIMEFRAME = 200;  // timeframe after which stability of measurement in any axis is gauged + compared about these values
-const float STABILITY_THRESHOLD = 20;  // upper bound on the change in degree a value under which is considered to be holding stable
+#define SENSING_TIMEFRAME 200  // number of seconds that gyroscope will sense gesture: 100 -> 5 seconds, 200 -> 10 seconds, ...
+const int32_t STABILITY_TIMEFRAME = 5;  // timeframe after which stability of measurement in any axis is gauged + compared about these values
+const float STABILITY_THRESHOLD = 1;  // upper bound on the change in degree a value under which is considered to be holding stable
 const int32_t COMPARE_THRESHOLD = 20;  // the difference in degrees around the actual value of measurement that still register as a match
-const int16_t POSITIVE_DELTA_WINDOW_SIZE = 100;
+const float DELTA_THRESHOLD = 30;  // amount of change in angle required for an major change along an axis is registered
+
+// const int16_t POSITIVE_DELTA_WINDOW_SIZE = 100;
 
 struct Data {
 
@@ -98,9 +100,7 @@ struct NewMeasurement {
   float y = 0.0f;  // angle measurement in y direction
   float z = 0.0f;  // angle measurement in z direction
 
-};
-
-NewMeasurement new_measurement;
+} new_measurement;
 
 enum Axis {  // used for labelling the axes
 
@@ -122,7 +122,6 @@ struct Gesture {  // container for recording gesture as axis of major change and
 
 Gesture recorded_gesture;  // gesture stored
 
-const float DELTA_THRESHOLD = 30;  // amount of change in angle required for an major change along an axis is registered
 
 /**
  * spi callback function:
@@ -146,147 +145,161 @@ void data_cb() {
 
 void processMeasurement(Mode current_mode, bool &gesture_match) {
 
-  int32_t positive_window_base = max(static_cast<int32_t>(0), static_cast<int32_t>(data.positive_delta_index - POSITIVE_DELTA_WINDOW_SIZE + 1));
-  int32_t current_window_size = data.positive_delta_index - positive_window_base;
+  // int32_t positive_window_base = max(static_cast<int32_t>(0), static_cast<int32_t>(data.positive_delta_index - POSITIVE_DELTA_WINDOW_SIZE + 1));
+  // int32_t current_window_size = data.positive_delta_index - positive_window_base;
 
-  int32_t count_x = 0;
-  int32_t count_y = 0;
-  int32_t count_z = 0;
+  // int32_t count_x = 0;
+  // int32_t count_y = 0;
+  // int32_t count_z = 0;
 
-  for (int32_t i = positive_window_base; i <= data.positive_delta_index; ++i) {
+  // for (int32_t i = positive_window_base; i <= data.positive_delta_index; ++i) {
 
-    if (data.positive_delta_x[i]) ++count_x;
-    if (data.positive_delta_y[i]) ++count_y;
-    if (data.positive_delta_z[i]) ++count_z;
+  //   if (data.positive_delta_x[i]) ++count_x;
+  //   if (data.positive_delta_y[i]) ++count_y;
+  //   if (data.positive_delta_z[i]) ++count_z;
 
-  }
+  // }
 
-  bool filtered_positive_delta_x = true;
-  bool filtered_positive_delta_y = true;
-  bool filtered_positive_delta_z = true;
+  // bool filtered_positive_delta_x = true;
+  // bool filtered_positive_delta_y = true;
+  // bool filtered_positive_delta_z = true;
 
-  if (count_x < (current_window_size / 2)) filtered_positive_delta_x = false; 
-  if (count_y < (current_window_size / 2)) filtered_positive_delta_y = false; 
-  if (count_z < (current_window_size / 2)) filtered_positive_delta_z = false; 
+  // if (count_x < (current_window_size / 2)) filtered_positive_delta_x = false; 
+  // if (count_y < (current_window_size / 2)) filtered_positive_delta_y = false; 
+  // if (count_z < (current_window_size / 2)) filtered_positive_delta_z = false; 
 
   bool compare_axis_deltas_x = false;
   bool compare_axis_deltas_y = false;
   bool compare_axis_deltas_z = false;
 
-  float change_in_x = 0.0;
-  float change_in_y = 0.0;
-  float change_in_z = 0.0;
+  // float change_in_x = 0.0;
+  // float change_in_y = 0.0;
+  // float change_in_z = 0.0;
 
-  if (abs(data.delta_x) > DELTA_THRESHOLD && (data.filtered_positive_delta_x[data.filtered_positive_delta_index - 1] != filtered_positive_delta_x || 
+  if (abs(data.delta_x) > DELTA_THRESHOLD && ((data.positive_delta_index > 0 && data.positive_delta_x[data.positive_delta_index] != data.positive_delta_x[data.positive_delta_index - 1]) || 
       (data.angles_index >= STABILITY_TIMEFRAME && abs(data.angles_x[data.angles_index - STABILITY_TIMEFRAME] - data.angles_x[data.angles_index]) <= STABILITY_THRESHOLD))) {
 
-        change_in_x = data.delta_x;
+        // change_in_x = data.delta_x;
         compare_axis_deltas_x = true;
       
   }
 
-  if (abs(data.delta_y) > DELTA_THRESHOLD && (data.filtered_positive_delta_y[data.filtered_positive_delta_index - 1] != filtered_positive_delta_y || 
+  if (abs(data.delta_y) > DELTA_THRESHOLD && ((data.positive_delta_index > 0 && data.positive_delta_y[data.positive_delta_index] != data.positive_delta_y[data.positive_delta_index - 1]) || 
      (data.angles_index >= STABILITY_TIMEFRAME && abs(data.angles_y[data.angles_index - STABILITY_TIMEFRAME] - data.angles_y[data.angles_index]) <= STABILITY_THRESHOLD))) {
 
-      change_in_y = data.delta_y;
+      // change_in_y = data.delta_y;
       compare_axis_deltas_y = true;
 
   }
 
-  if (abs(data.delta_z) > DELTA_THRESHOLD && (data.filtered_positive_delta_z[data.filtered_positive_delta_index - 1] != filtered_positive_delta_z || 
+  if (abs(data.delta_z) > DELTA_THRESHOLD && ((data.positive_delta_index > 0 && data.positive_delta_z[data.positive_delta_index] != data.positive_delta_z[data.positive_delta_index - 1]) || 
      (data.angles_index >= STABILITY_TIMEFRAME && abs(data.angles_z[data.angles_index - STABILITY_TIMEFRAME] - data.angles_z[data.angles_index]) <= STABILITY_THRESHOLD))) {
 
-      change_in_z = data.delta_z;
+      // change_in_z = data.delta_z;
       compare_axis_deltas_z = true;
 
   }
 
-  if (compare_axis_deltas_x && abs(change_in_x) > DELTA_THRESHOLD) {
+  // if (compare_axis_deltas_x && abs(change_in_x) > DELTA_THRESHOLD) {
+  if (compare_axis_deltas_x && abs(data.delta_x) > DELTA_THRESHOLD) {
 
-    if (abs(change_in_x) >= abs(max(change_in_y, data.delta_y)) && abs(change_in_x) >= abs(max(change_in_z, data.delta_z))) {
+    // if (abs(change_in_x) >= abs(max(change_in_y, data.delta_y)) && abs(change_in_x) >= abs(max(change_in_z, data.delta_z))) {
+    if (abs(data.delta_x) >= abs(data.delta_y) && abs(data.delta_x) >= abs(data.delta_z)) {
 
       if (current_mode == Mode::RECORD) {
 
         recorded_gesture.axis[recorded_gesture.next_index] = Axis::X;
-        recorded_gesture.angle_change[recorded_gesture.next_index] = change_in_x;
+        recorded_gesture.angle_change[recorded_gesture.next_index] = data.delta_x;
         ++recorded_gesture.next_index;
 
       } else {
 
-        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::X && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - change_in_x) <= COMPARE_THRESHOLD)) {
+        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::X && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - data.delta_x) <= COMPARE_THRESHOLD)) {
 
           gesture_match = false;
-          ++recorded_gesture.compare_index;
 
         }
 
+        ++recorded_gesture.compare_index;
+
       }
 
-      data.delta_x = new_measurement.x;
+      data.delta_x = 0;
+      data.delta_y = 0;
+      data.delta_z = 0;
 
     }
 
   }
 
-  if (compare_axis_deltas_y && abs(change_in_y) > DELTA_THRESHOLD) {
+  // if (compare_axis_deltas_y && abs(change_in_y) > DELTA_THRESHOLD) {
+  if (compare_axis_deltas_y && abs(data.delta_y) > DELTA_THRESHOLD) {
 
-    if (abs(change_in_y) >= max(change_in_x, data.delta_x) && abs(change_in_y) >= max(change_in_z, data.delta_z)) {
+    // if (abs(change_in_y) >= max(change_in_x, data.delta_x) && abs(change_in_y) >= max(change_in_z, data.delta_z)) {
+    if (abs(data.delta_y) >= abs(data.delta_x) && abs(data.delta_y) >= abs(data.delta_z)) {
 
       if (current_mode == Mode::RECORD) {
 
         recorded_gesture.axis[recorded_gesture.next_index] = Axis::Y;
-        recorded_gesture.angle_change[recorded_gesture.next_index] = change_in_y;
+        recorded_gesture.angle_change[recorded_gesture.next_index] = data.delta_y;
         ++recorded_gesture.next_index;
 
       } else {
 
-        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::Y && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - change_in_y) <= COMPARE_THRESHOLD)) {
+        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::Y && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - data.delta_y) <= COMPARE_THRESHOLD)) {
 
           gesture_match = false;
-          ++recorded_gesture.compare_index;
 
         }
 
+        ++recorded_gesture.compare_index;
+
       }
 
-      data.delta_y = new_measurement.y;
+      data.delta_x = 0;
+      data.delta_y = 0;
+      data.delta_z = 0;
 
     }
 
   }
 
-  if (compare_axis_deltas_z && abs(change_in_z) > DELTA_THRESHOLD) {
+  // if (compare_axis_deltas_z && abs(change_in_z) > DELTA_THRESHOLD) {
+  if (compare_axis_deltas_z && abs(data.delta_z) > DELTA_THRESHOLD) {
 
-    if (abs(change_in_z) >= abs(max(change_in_y, data.delta_y)) && abs(change_in_z >= max(change_in_x, data.delta_x))) {
+    if (abs(data.delta_z) >= abs(data.delta_x) && abs(data.delta_z) >= abs(data.delta_y)) {
 
       if (current_mode == Mode::RECORD) {
 
         recorded_gesture.axis[recorded_gesture.next_index] = Axis::Z;
-        recorded_gesture.angle_change[recorded_gesture.next_index] = change_in_z;
+        recorded_gesture.angle_change[recorded_gesture.next_index] = data.delta_z;
         ++recorded_gesture.next_index;
 
       } else {
 
-        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::Z && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - change_in_z) <= COMPARE_THRESHOLD)) {
+        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::Z && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - data.delta_z) <= COMPARE_THRESHOLD)) {
 
-          ++recorded_gesture.compare_index;
           gesture_match = false;
 
         }
 
+        ++recorded_gesture.compare_index;
+
       }
 
-      data.delta_z = new_measurement.z;
+      data.delta_x = 0;
+      data.delta_y = 0;
+      data.delta_z = 0;
 
     }
 
   }
 
-  data.filtered_positive_delta_x[data.filtered_positive_delta_index] = filtered_positive_delta_x;
-  data.filtered_positive_delta_y[data.filtered_positive_delta_index] = filtered_positive_delta_y;
-  data.filtered_positive_delta_z[data.filtered_positive_delta_index] = filtered_positive_delta_z;
+  // data.filtered_positive_delta_x[data.filtered_positive_delta_index] = filtered_positive_delta_x;
+  // data.filtered_positive_delta_y[data.filtered_positive_delta_index] = filtered_positive_delta_y;
+  // data.filtered_positive_delta_z[data.filtered_positive_delta_index] = filtered_positive_delta_z;
 
-  ++data.filtered_positive_delta_index;
+  // ++data.filtered_positive_delta_index;
 
 
 }
@@ -306,19 +319,16 @@ void readGyro(Mode current_mode) {
     data.delta_x = 0;
     data.delta_y = 0;
     data.delta_z = 0;
+
     data.filtered_positive_delta_index = 1;
     data.positive_delta_index = -1;
     data.angles_index = -1;
     
     recorded_gesture.compare_index = 0;
     recorded_gesture.next_index = 0;
-
+         
     for (int16_t i = 0; i < SENSING_TIMEFRAME; ++i)
     {
-
-      // Timer t;
-
-      // t.start();
 
       // wait until new sample is ready
       flags.wait_all(DATA_READY_FLAG);
@@ -364,7 +374,7 @@ void readGyro(Mode current_mode) {
       if (abs(new_measurement.y) > 0.15) {
         
         data.delta_y += new_measurement.y;
-        data.angles_y[data.angles_index] = data.angles_index > 0 ? data.angles_y[data.angles_index - 1] + new_measurement.x: new_measurement.y;
+        data.angles_y[data.angles_index] = data.angles_index > 0 ? data.angles_y[data.angles_index - 1] + new_measurement.y: new_measurement.y;
       
       } else {
 
@@ -375,7 +385,7 @@ void readGyro(Mode current_mode) {
       if (abs(new_measurement.z) > 0.15) {
         
         data.delta_z += new_measurement.z;
-        data.angles_z[data.angles_index] = data.angles_index > 0 ? data.angles_z[data.angles_index - 1] + new_measurement.x : new_measurement.z;
+        data.angles_z[data.angles_index] = data.angles_index > 0 ? data.angles_z[data.angles_index - 1] + new_measurement.z : new_measurement.z;
 
       } else {
 
@@ -383,27 +393,17 @@ void readGyro(Mode current_mode) {
 
       }
 
-      // processMeasurement(current_mode, gesture_match);
+      processMeasurement(current_mode, gesture_match);
       
-      // printf("Angles |\tx: %4.5f \t y: %4.5f \t z: %4.5f\n", angle_x , angle_y, angle_z);
-
-      // t.stop();
+      printf("Angles ||\tx: %4.5f\t|\ty: %4.5f\t|\tz: %4.5f\t||\n", data.angles_x[data.angles_index], data.angles_y[data.angles_index], data.angles_z[data.angles_index]);
 
       // waiter.wait_for(std::chrono::microseconds(100000 - std::chrono::duration_cast<std::chrono::microseconds>(t.elapsed_time()).count()));
-
-      // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(t.elapsed_time()).count() << std::endl;
       
     }
 
-    // for (int i = 0; i < SENSING_TIMEFRAME; ++i) {
-
-    //   if (i < recorded_gesture.next_index) std::cout << recorded_gesture.axis[i] << ", " << recorded_gesture.angle_change[i] << ", " << recorded_gesture.angle_change[i] << std::endl;
-
-    // }
-
     for (int i = 0; i < SENSING_TIMEFRAME; ++i) {
 
-      std::cout << data.angles_x[i] << ", " << data.angles_y[i] << "," << data.angles_z[i] << std::endl;
+      if (i < recorded_gesture.next_index) std::cout << recorded_gesture.axis[i] << ", " << recorded_gesture.angle_change[i] << std::endl;
 
     }
 
