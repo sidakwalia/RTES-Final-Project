@@ -1,21 +1,10 @@
 #include "mbed.h"
-#include "AccurateWaiter.h"
-#include <iostream>
+#include <math.h>
+#include <float.h>
+#include "rtos/Mutex.h"
+#include "rtos/EventFlags.h"
 
-SPI spi(PF_9, PF_8, PF_7, PC_1, use_gpio_ssel); // mosi, miso, sclk, cs
-
-InterruptIn int2(PA_2, PullDown);
-
-DigitalIn button(USER_BUTTON); // Button input
-
-/* Status LED outputs: */
-DigitalOut led1(LED1); 
-DigitalOut led2(LED2);
-
-bool button_pressed = false;  // button state
-int button_hold_time = 0;  // button time
-
-#define CTRL_REG1 0x20  // register fields(bits): data_rate(2),Bandwidth(2),Power_down(1),Zen(1),Yen(1),Xen(1)
+#define CTRL_REG1 0x20 // register fields(bits): data_rate(2),Bandwidth(2),Power_down(1),Zen(1),Yen(1),Xen(1)
 
 /*
   Data sheet table 22
@@ -23,9 +12,9 @@ int button_hold_time = 0;  // button time
   Cutoff: Filter out high frequency
   configuration: 200Hz ODR,50Hz cutoff, Power on, Z on, Y on, X on
 */
-#define CTRL_REG1_CONFIG 0b11'10'1'1'1'1
+#define CTRL_REG1_CONFIG 0b01'10'1'1'1'1
 
-#define CTRL_REG4 0x23  // register fields(bits): reserved(1), endian-ness(1),Full scale sel(2), reserved(1),self-test(2), SPI mode(1)
+#define CTRL_REG4 0x23 // register fields(bits): reserved(1), endian-ness(1),Full scale sel(2), reserved(1),self-test(2), SPI mode(1)
 
 /*
   Controls how fast you want to measure degrees per second : (00: 245 dps, 01: 500 dps, 10: 2000dps, 11: 2000 dps)
@@ -39,531 +28,401 @@ int button_hold_time = 0;  // button time
 */
 #define CTRL_REG3 0x22
 
-#define CTRL_REG3_CONFIG 0b0'0'0'0'1'000  // configuration: Int1 disabled, Boot status disabled, active high interrupts, push-pull, enable Int2 data ready, disable fifo interrupts
+#define CTRL_REG3_CONFIG 0b0'0'0'0'1'000 // configuration: Int1 disabled, Boot status disabled, active high interrupts, push-pull, enable Int2 data ready, disable fifo interrupts
 
-#define OUT_X_L 0x28  // By setting the MSB to 1 we can auto increment through the output data from 0x28 to 0x2D (X: Z)
+#define OUT_X_L 0x28 // By setting the MSB to 1 we can auto increment through the output data from 0x28 to 0x2D (X: Z)
 
-#define SPI_FLAG 1  // SPI flag when complete
+#define SPI_FLAG 1 // SPI flag when complete
 
-#define DATA_READY_FLAG 2  // Data ready flag when next data is values of data are ready to be read.
+#define DATA_READY_FLAG 2 // Data ready flag when next data is values of data are ready to be read.
+
+#define SCALING_FACTOR (17.5f * 0.017453292519943295769236907684886f / 1000.0f)
+#define MAX_SEQUENCE_LENGTH 100
+#define DTW_THRESHOLD 1.2
+
+rtos::Mutex mutex;
+Mutex recMutex;
+Mutex readMutex;
+Mutex stopMutex;
+Mutex completeMutex;
+rtos::EventFlags buttonPressFlag;
+
+float dtw_matrix[MAX_SEQUENCE_LENGTH][MAX_SEQUENCE_LENGTH];
+float sequence_x[MAX_SEQUENCE_LENGTH];
+float sequence_y[MAX_SEQUENCE_LENGTH];
+float sequence_z[MAX_SEQUENCE_LENGTH];
+int seq_length = 0;
+
+float alpha = 0.75f; // Filter coefficient
+
+SPI spi(PF_9, PF_8, PF_7, PC_1, use_gpio_ssel); // mosi, miso, sclk, cs
+
+InterruptIn int2(PA_2, PullDown);
+
+InterruptIn button(USER_BUTTON); // Button input
+
+/* Status LED outputs: */
+DigitalOut greenLed(LED1);
+DigitalOut redLed(LED2);
 
 uint8_t write_buf[32];
 uint8_t read_buf[32];
 
+int16_t raw_gx, raw_gy, raw_gz;
+float gx, gy, gz;
+bool current = 0;
+
 EventFlags flags;
 
-enum Mode {
+volatile bool isRecording = true;
+volatile bool isReading = false;
+volatile bool stop = false;
+volatile bool record = false;
+volatile bool compare = false;
+volatile bool complete = false;
 
-  RECORD = 1,
-  UNLOCK
-
-};
-
-bool show_reading_indicator = false;
-Thread reading_led_indicator_thread;
-
-#define SENSING_TIMEFRAME 200  // number of seconds that gyroscope will sense gesture: 100 -> 5 seconds, 200 -> 10 seconds, ...
-const int32_t STABILITY_TIMEFRAME = 5;  // timeframe after which stability of measurement in any axis is gauged + compared about these values
-const float STABILITY_THRESHOLD = 1;  // upper bound on the change in degree a value under which is considered to be holding stable
-const int32_t COMPARE_THRESHOLD = 20;  // the difference in degrees around the actual value of measurement that still register as a match
-const float DELTA_THRESHOLD = 30;  // amount of change in angle required for an major change along an axis is registered
-
-// const int16_t POSITIVE_DELTA_WINDOW_SIZE = 100;
-
-struct Data {
-
-  float delta_x = 0.0f;  // current change in x axis since last time the direction flipped or angle held stable
-  float delta_y = 0.0f;  // current change in y axis since last time the direction flipped or angle held stable
-  float delta_z = 0.0f;  // current change in z axis since last time the direction flipped or angle held stable
-
-  bool positive_delta_x[SENSING_TIMEFRAME];  // direction of change in x axis currently in the positive direction?
-  bool positive_delta_y[SENSING_TIMEFRAME];  // direction of change in y axis currently in the positive direction?
-  bool positive_delta_z[SENSING_TIMEFRAME];  // direction of change in z axis currently in the positive direction?
-  
-  bool filtered_positive_delta_x[SENSING_TIMEFRAME + 1] = {true};
-  bool filtered_positive_delta_y[SENSING_TIMEFRAME + 1] = {true};
-  bool filtered_positive_delta_z[SENSING_TIMEFRAME + 1] = {true};
-
-  float angles_x[SENSING_TIMEFRAME];
-  float angles_y[SENSING_TIMEFRAME];
-  float angles_z[SENSING_TIMEFRAME];
-
-  int32_t angles_index = 0;
-  int32_t positive_delta_index = -1;
-  int32_t filtered_positive_delta_index = 1;
-
-} data;
-
-struct NewMeasurement {
-
-  float x = 0.0f;  // angle measurement in x direction
-  float y = 0.0f;  // angle measurement in y direction
-  float z = 0.0f;  // angle measurement in z direction
-
-} new_measurement;
-
-enum Axis {  // used for labelling the axes
-
-  X = 1,
-  Y,
-  Z
-
-};
-
-struct Gesture {  // container for recording gesture as axis of major change and amount of change
-
-  Axis axis[SENSING_TIMEFRAME];  // axis of major change
-  float angle_change[SENSING_TIMEFRAME];  // amount of change
-
-  int32_t next_index = 0;  // index where next measurement goes
-  int32_t compare_index = 0;  // measurement to be comapred next
-
-};
-
-Gesture recorded_gesture;  // gesture stored
-
+float filtered_angle_x = 0.0f;
+float filtered_angle_y = 0.0f;
+float filtered_angle_z = 0.0f;
 
 /**
  * spi callback function:
  * The spi transfer function requires that the callback provided to it takes an int parameter
-*/
-void spi_cb(int event) {
+ */
+void spi_cb(int event)
+{
 
-  flags.set(SPI_FLAG);
-
+    flags.set(SPI_FLAG);
 };
-
 
 /**
  * Data callback function
-*/
-void data_cb() {
-  
-  flags.set(DATA_READY_FLAG);
-
-};
-
-void processMeasurement(Mode current_mode, bool &gesture_match) {
-
-  // int32_t positive_window_base = max(static_cast<int32_t>(0), static_cast<int32_t>(data.positive_delta_index - POSITIVE_DELTA_WINDOW_SIZE + 1));
-  // int32_t current_window_size = data.positive_delta_index - positive_window_base;
-
-  // int32_t count_x = 0;
-  // int32_t count_y = 0;
-  // int32_t count_z = 0;
-
-  // for (int32_t i = positive_window_base; i <= data.positive_delta_index; ++i) {
-
-  //   if (data.positive_delta_x[i]) ++count_x;
-  //   if (data.positive_delta_y[i]) ++count_y;
-  //   if (data.positive_delta_z[i]) ++count_z;
-
-  // }
-
-  // bool filtered_positive_delta_x = true;
-  // bool filtered_positive_delta_y = true;
-  // bool filtered_positive_delta_z = true;
-
-  // if (count_x < (current_window_size / 2)) filtered_positive_delta_x = false; 
-  // if (count_y < (current_window_size / 2)) filtered_positive_delta_y = false; 
-  // if (count_z < (current_window_size / 2)) filtered_positive_delta_z = false; 
-
-  bool compare_axis_deltas_x = false;
-  bool compare_axis_deltas_y = false;
-  bool compare_axis_deltas_z = false;
-
-  // float change_in_x = 0.0;
-  // float change_in_y = 0.0;
-  // float change_in_z = 0.0;
-
-  if (abs(data.delta_x) > DELTA_THRESHOLD && ((data.positive_delta_index > 0 && data.positive_delta_x[data.positive_delta_index] != data.positive_delta_x[data.positive_delta_index - 1]) || 
-      (data.angles_index >= STABILITY_TIMEFRAME && abs(data.angles_x[data.angles_index - STABILITY_TIMEFRAME] - data.angles_x[data.angles_index]) <= STABILITY_THRESHOLD))) {
-
-        // change_in_x = data.delta_x;
-        compare_axis_deltas_x = true;
-      
-  }
-
-  if (abs(data.delta_y) > DELTA_THRESHOLD && ((data.positive_delta_index > 0 && data.positive_delta_y[data.positive_delta_index] != data.positive_delta_y[data.positive_delta_index - 1]) || 
-     (data.angles_index >= STABILITY_TIMEFRAME && abs(data.angles_y[data.angles_index - STABILITY_TIMEFRAME] - data.angles_y[data.angles_index]) <= STABILITY_THRESHOLD))) {
-
-      // change_in_y = data.delta_y;
-      compare_axis_deltas_y = true;
-
-  }
-
-  if (abs(data.delta_z) > DELTA_THRESHOLD && ((data.positive_delta_index > 0 && data.positive_delta_z[data.positive_delta_index] != data.positive_delta_z[data.positive_delta_index - 1]) || 
-     (data.angles_index >= STABILITY_TIMEFRAME && abs(data.angles_z[data.angles_index - STABILITY_TIMEFRAME] - data.angles_z[data.angles_index]) <= STABILITY_THRESHOLD))) {
-
-      // change_in_z = data.delta_z;
-      compare_axis_deltas_z = true;
-
-  }
-
-  // if (compare_axis_deltas_x && abs(change_in_x) > DELTA_THRESHOLD) {
-  if (compare_axis_deltas_x && abs(data.delta_x) > DELTA_THRESHOLD) {
-
-    // if (abs(change_in_x) >= abs(max(change_in_y, data.delta_y)) && abs(change_in_x) >= abs(max(change_in_z, data.delta_z))) {
-    if (abs(data.delta_x) >= abs(data.delta_y) && abs(data.delta_x) >= abs(data.delta_z)) {
-
-      if (current_mode == Mode::RECORD) {
-
-        recorded_gesture.axis[recorded_gesture.next_index] = Axis::X;
-        recorded_gesture.angle_change[recorded_gesture.next_index] = data.delta_x;
-        ++recorded_gesture.next_index;
-
-      } else {
-
-        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::X && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - data.delta_x) <= COMPARE_THRESHOLD)) {
-
-          gesture_match = false;
-
-        }
-
-        ++recorded_gesture.compare_index;
-
-      }
-
-      data.delta_x = 0;
-      data.delta_y = 0;
-      data.delta_z = 0;
-
-    }
-
-  }
-
-  // if (compare_axis_deltas_y && abs(change_in_y) > DELTA_THRESHOLD) {
-  if (compare_axis_deltas_y && abs(data.delta_y) > DELTA_THRESHOLD) {
-
-    // if (abs(change_in_y) >= max(change_in_x, data.delta_x) && abs(change_in_y) >= max(change_in_z, data.delta_z)) {
-    if (abs(data.delta_y) >= abs(data.delta_x) && abs(data.delta_y) >= abs(data.delta_z)) {
-
-      if (current_mode == Mode::RECORD) {
-
-        recorded_gesture.axis[recorded_gesture.next_index] = Axis::Y;
-        recorded_gesture.angle_change[recorded_gesture.next_index] = data.delta_y;
-        ++recorded_gesture.next_index;
-
-      } else {
-
-        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::Y && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - data.delta_y) <= COMPARE_THRESHOLD)) {
-
-          gesture_match = false;
-
-        }
-
-        ++recorded_gesture.compare_index;
-
-      }
-
-      data.delta_x = 0;
-      data.delta_y = 0;
-      data.delta_z = 0;
-
-    }
-
-  }
-
-  // if (compare_axis_deltas_z && abs(change_in_z) > DELTA_THRESHOLD) {
-  if (compare_axis_deltas_z && abs(data.delta_z) > DELTA_THRESHOLD) {
-
-    if (abs(data.delta_z) >= abs(data.delta_x) && abs(data.delta_z) >= abs(data.delta_y)) {
-
-      if (current_mode == Mode::RECORD) {
-
-        recorded_gesture.axis[recorded_gesture.next_index] = Axis::Z;
-        recorded_gesture.angle_change[recorded_gesture.next_index] = data.delta_z;
-        ++recorded_gesture.next_index;
-
-      } else {
-
-        if (!(recorded_gesture.axis[recorded_gesture.compare_index] == Axis::Z && abs(recorded_gesture.angle_change[recorded_gesture.compare_index] - data.delta_z) <= COMPARE_THRESHOLD)) {
-
-          gesture_match = false;
-
-        }
-
-        ++recorded_gesture.compare_index;
-
-      }
-
-      data.delta_x = 0;
-      data.delta_y = 0;
-      data.delta_z = 0;
-
-    }
-
-  }
-
-  // data.filtered_positive_delta_x[data.filtered_positive_delta_index] = filtered_positive_delta_x;
-  // data.filtered_positive_delta_y[data.filtered_positive_delta_index] = filtered_positive_delta_y;
-  // data.filtered_positive_delta_z[data.filtered_positive_delta_index] = filtered_positive_delta_z;
-
-  // ++data.filtered_positive_delta_index;
-
-
-}
-
-void readGyro(Mode current_mode) {
-
-    while (button.read()) {  //Start the recording when the pressed button realeased
-
-      thread_sleep_for(1);
-
-    }
-
-    int16_t raw_gx, raw_gy, raw_gz;
-
-    bool gesture_match = true;
-
-    data.delta_x = 0;
-    data.delta_y = 0;
-    data.delta_z = 0;
-
-    data.filtered_positive_delta_index = 1;
-    data.positive_delta_index = -1;
-    data.angles_index = -1;
-    
-    recorded_gesture.compare_index = 0;
-    recorded_gesture.next_index = 0;
-         
-    for (int16_t i = 0; i < SENSING_TIMEFRAME; ++i)
-    {
-
-      // wait until new sample is ready
-      flags.wait_all(DATA_READY_FLAG);
-
-      //               data  | read | increment
-      write_buf[0] = OUT_X_L | 0x80 | 0x40;
-
-      // start sequential sample reading  7= (read 6 registers and write to 1)
-      spi.transfer(write_buf, 7, read_buf, 7, spi_cb, SPI_EVENT_COMPLETE);
-      flags.wait_all(SPI_FLAG);
-
-      // read_buf after transfer: garbage byte, gx_low,gx_high,gy_low,gy_high,gz_low,gz_high
-      // Put the high and low bytes in the correct order lowB,Highb -> HighB,LowB
-      raw_gx = (((uint16_t)read_buf[2]) << 8) | ((uint16_t)read_buf[1]);
-      raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
-      raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
-
-      //  printf("RAW|\tgx: %d \t gy: %d \t gz: %d\n",raw_gx,raw_gy,raw_gz);
-
-      new_measurement.x = ((float)raw_gx) * 0.001;
-      new_measurement.y = ((float)raw_gy) * 0.001;
-      new_measurement.z = ((float)raw_gz) * 0.001;
-
-      ++data.positive_delta_index;
-
-      data.positive_delta_x[data.positive_delta_index] = new_measurement.x > 0;
-      data.positive_delta_y[data.positive_delta_index] = new_measurement.y > 0;
-      data.positive_delta_z[data.positive_delta_index] = new_measurement.z > 0;
-
-      ++data.angles_index;
-
-      if (abs(new_measurement.x) > 0.15) {
-        
-          data.delta_x += new_measurement.x;
-          data.angles_x[data.angles_index] = data.angles_index > 0 ? data.angles_x[data.angles_index - 1] + new_measurement.x: new_measurement.x;
-      
-      } else {
-
-        data.angles_x[data.angles_index] = data.angles_index > 0 ? data.angles_x[data.angles_index - 1]: 0;
-
-      }
-
-      if (abs(new_measurement.y) > 0.15) {
-        
-        data.delta_y += new_measurement.y;
-        data.angles_y[data.angles_index] = data.angles_index > 0 ? data.angles_y[data.angles_index - 1] + new_measurement.y: new_measurement.y;
-      
-      } else {
-
-        data.angles_y[data.angles_index] = data.angles_index > 0 ? data.angles_y[data.angles_index - 1]: 0;
-
-      }
-      
-      if (abs(new_measurement.z) > 0.15) {
-        
-        data.delta_z += new_measurement.z;
-        data.angles_z[data.angles_index] = data.angles_index > 0 ? data.angles_z[data.angles_index - 1] + new_measurement.z : new_measurement.z;
-
-      } else {
-
-        data.angles_z[data.angles_index] = data.angles_index > 0 ? data.angles_z[data.angles_index - 1]: 0;
-
-      }
-
-      processMeasurement(current_mode, gesture_match);
-      
-      printf("Angles ||\tx: %4.5f\t|\ty: %4.5f\t|\tz: %4.5f\t||\n", data.angles_x[data.angles_index], data.angles_y[data.angles_index], data.angles_z[data.angles_index]);
-
-      // waiter.wait_for(std::chrono::microseconds(100000 - std::chrono::duration_cast<std::chrono::microseconds>(t.elapsed_time()).count()));
-      
-    }
-
-    for (int i = 0; i < SENSING_TIMEFRAME; ++i) {
-
-      if (i < recorded_gesture.next_index) std::cout << recorded_gesture.axis[i] << ", " << recorded_gesture.angle_change[i] << std::endl;
-
-    }
-
-    led1 = 0;
-    led2 = 0;
-
-    if (gesture_match) led1 = 1;
-    else led2 = 1;
-
-    thread_sleep_for(5000);
-
-    led1 = 0;
-    led2 = 0;
-
-    std::cout << "DONE" << std::endl;
-
-    // t1.stop();
-    // std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(t1.elapsed_time()).count() << std::endl;
-
-    show_reading_indicator = false;
-
-}
-
-void blinkLEDs() {
-
-  while (show_reading_indicator) {
-
-    led1 = 1;
-    led2 = 1;
-
-    thread_sleep_for(500);
-  
-    led1 = 0;
-    led2 = 0;
-
-    thread_sleep_for(500);
-
-  }
-
-  led1 = 1;
-  led2 = 1;
-
-}
-
-void blinkMode(Mode current_mode) {
-
-  if (current_mode == Mode::UNLOCK) {
-
-    for (int8_t i = 0; i < 3; i++) {
-
-      led2 = 1;
-      thread_sleep_for(500);
-      led2 = 0;
-      thread_sleep_for(500);
-
-    }
-
-  } else if (current_mode == Mode::RECORD) {
-    
-    led2 = 1;
-    thread_sleep_for(3000);
-    led2 = 0;
-
-  }
-
-  show_reading_indicator = true;
-
-  Thread reading_led_indicator_thread;
-
-  reading_led_indicator_thread.start(blinkLEDs);
-
-}
-
-
-int main() {
-
-  // Setup the spi for 8 bit data, high steady state clock,
-  // second edge capture, with a 1MHz clock rate
-  spi.format(8, 3);
-  spi.frequency(1'000'000);
-
-  // Configure the registers
-  write_buf[0] = CTRL_REG1;
-  write_buf[1] = CTRL_REG1_CONFIG;
-  spi.transfer(write_buf, 2, read_buf, 2, spi_cb, SPI_EVENT_COMPLETE);
-  flags.wait_all(SPI_FLAG);
-
-  // Configure the output data register
-  write_buf[0] = CTRL_REG4;
-  write_buf[1] = CTRL_REG4_CONFIG;
-  spi.transfer(write_buf, 2, read_buf, 2, spi_cb, SPI_EVENT_COMPLETE);
-  flags.wait_all(SPI_FLAG);
-
-  // configure the interrupt to call our function
-  // when the pin becomes high
-  int2.rise(&data_cb);
-  write_buf[0] = CTRL_REG3;
-  write_buf[1] = CTRL_REG3_CONFIG;
-  spi.transfer(write_buf, 2, read_buf, 2, spi_cb, SPI_EVENT_COMPLETE);
-  flags.wait_all(SPI_FLAG);
-
-  // The gyroscope sensor keeps its configuration between power cycles.
-  // This means that the gyroscope will already have it's data-ready interrupt
-  // configured when we turn the board on the second time. This can lead to
-  // the pin level rising before we have configured our interrupt handler.
-  // To account for this, we manually check the signal and set the flag
-  // for the first sample.
-  if (!(flags.get() & DATA_READY_FLAG) && (int2.read() == 1)) {
+ */
+void data_cb()
+{
 
     flags.set(DATA_READY_FLAG);
-  
-  }
+};
 
-  while (1) {
-    
-    bool current_state = button.read();
-    
-    //Press and hold the button for 2s, green light will on it will get into record mode.
-    //In record mode, press and release, green light off and leave the record mode.
-    //Press and release within 2s, red light will blink, unlock mode on (function needed)
-    if (current_state == true && button_pressed == false) {
+void setupGyro()
+{
 
-      // Button was just pressed
-      button_pressed = true;
-      button_hold_time = 0;
-    
+    // Setup the spi for 8 bit data, high steady state clock,
+    // second edge capture, with a 1MHz clock rate
+    spi.format(8, 3);
+    spi.frequency(1'000'000);
+
+    // Configure the registers
+    write_buf[0] = CTRL_REG1;
+    write_buf[1] = CTRL_REG1_CONFIG;
+    spi.transfer(write_buf, 2, read_buf, 2, spi_cb, SPI_EVENT_COMPLETE);
+    flags.wait_all(SPI_FLAG);
+
+    // Configure the output data register
+    write_buf[0] = CTRL_REG4;
+    write_buf[1] = CTRL_REG4_CONFIG;
+    spi.transfer(write_buf, 2, read_buf, 2, spi_cb, SPI_EVENT_COMPLETE);
+    flags.wait_all(SPI_FLAG);
+
+    // configure the interrupt to call our function
+    // when the pin becomes high
+    int2.rise(&data_cb);
+    write_buf[0] = CTRL_REG3;
+    write_buf[1] = CTRL_REG3_CONFIG;
+    spi.transfer(write_buf, 2, read_buf, 2, spi_cb, SPI_EVENT_COMPLETE);
+    flags.wait_all(SPI_FLAG);
+
+    // The gyroscope sensor keeps its configuration between power cycles.
+    // This means that the gyroscope will already have it's data-ready interrupt
+    // configured when we turn the board on the second time. This can lead to
+    // the pin level rising before we have configured our interrupt handler.
+    // To account for this, we manually check the signal and set the flag
+    // for the first sample.
+    if (!(flags.get() & DATA_READY_FLAG) && (int2.read() == 1))
+    {
+        flags.set(DATA_READY_FLAG);
+    }
+}
+
+float complementaryFilter(float gyro_value, float accel_angle, float alpha)
+{
+    // Apply complementary filter equation
+    float filtered_angle = alpha * gyro_value + (1 - alpha) * accel_angle;
+    return filtered_angle;
+}
+
+float min(float a, float b, float c)
+{
+    float m = a;
+    if (b < m)
+        m = b;
+    if (c < m)
+        m = c;
+    return m;
+}
+
+float euclidean_distance(float a, float b)
+{
+    return sqrtf(powf(a - b, 2));
+}
+
+float dtw(float *s, float *t, int len)
+{
+    mutex.lock();
+    for (int i = 0; i < len; i++)
+    {
+        for (int j = 0; j < len; j++)
+        {
+            dtw_matrix[i][j] = FLT_MAX;
+        }
     }
 
-    else if (current_state == true && button_pressed == true) {
-      
-      // Button is being held down
-      button_hold_time++;
+    dtw_matrix[0][0] = 0;
 
-      if (button_hold_time >= 2*1000) {
-        
-        blinkMode(Mode::RECORD);
-        readGyro(Mode::RECORD);
+    for (int i = 1; i < len; i++)
+    {
+        for (int j = 1; j < len; j++)
+        {
+            float cost = euclidean_distance(s[i], t[j]);
+            dtw_matrix[i][j] = cost + min(dtw_matrix[i - 1][j],
+                                          dtw_matrix[i][j - 1],
+                                          dtw_matrix[i - 1][j - 1]);
+        }
+    }
+     mutex.unlock();
+    return dtw_matrix[len - 1][len - 1];
+}
 
-        led1 = 0;
-        led2 = 0;
-      
-      }
+void recordGesture()
+{
 
-    } else if (current_state == false && button_pressed == true) {
-      
-      // Button was just released
-      if (button_hold_time < 2*1000) {
-        
-        blinkMode(Mode::UNLOCK);//unlock mode
-        readGyro(Mode::UNLOCK);
+     mutex.lock();
+    seq_length = 0;
+    write_buf[0] = OUT_X_L | 0x80 | 0x40;
 
-      }
+    while (record && seq_length < MAX_SEQUENCE_LENGTH)
+    {
 
-      button_pressed = false;
-      button_hold_time = 0;
+        flags.wait_all(DATA_READY_FLAG);
+        spi.transfer(write_buf, 7, read_buf, 7, spi_cb, SPI_EVENT_COMPLETE);
+        flags.wait_all(SPI_FLAG);
 
+        raw_gx = (((uint16_t)read_buf[2]) << 8) | ((uint16_t)read_buf[1]);
+        raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
+        raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
+
+        gx = (((float)raw_gx) * 0.0001 * 180) / 3.14159;
+        gy = (((float)raw_gy) * 0.0001 * 180) / 3.14159;
+        gz = (((float)raw_gz) * 0.0001 * 180) / 3.14159;
+
+        thread_sleep_for(1);
+
+        //  printf("Actual|\tgx: %4.5f \t gy: %4.5f \t gz: %4.5f\n",  gx ,  gy, gz);
+
+        filtered_angle_x = complementaryFilter(gx, filtered_angle_x, alpha);
+        filtered_angle_y = complementaryFilter(gy, filtered_angle_y, alpha);
+        filtered_angle_z = complementaryFilter(gz, filtered_angle_z, alpha);
+
+        sequence_x[seq_length] = filtered_angle_x;
+        sequence_y[seq_length] = filtered_angle_y;
+        sequence_z[seq_length] = filtered_angle_z;
+
+        seq_length++;
+
+        //  printf("Actual|\tgx: %4.5f \t gy: %4.5f \t gz: %4.5f\n", filtered_angle_x, filtered_angle_y, filtered_angle_z);
+    }
+    mutex.unlock();
+}
+
+float compare_sequence_x[MAX_SEQUENCE_LENGTH];
+float compare_sequence_y[MAX_SEQUENCE_LENGTH];
+float compare_sequence_z[MAX_SEQUENCE_LENGTH];
+
+float dtw_distance_x;
+float dtw_distance_y;
+float dtw_distance_z;
+
+void compareGesture()
+{
+     mutex.lock();
+    write_buf[0] = OUT_X_L | 0x80 | 0x40;
+    int compare_length = 0;
+
+    while (compare && compare_length < MAX_SEQUENCE_LENGTH)
+    {
+        flags.wait_all(DATA_READY_FLAG);
+        spi.transfer(write_buf, 7, read_buf, 7, spi_cb, SPI_EVENT_COMPLETE);
+        flags.wait_all(SPI_FLAG);
+
+        raw_gx = (((uint16_t)read_buf[2]) << 8) | ((uint16_t)read_buf[1]);
+        raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
+        raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
+
+        gx = (((float)raw_gx) * 0.0001 * 180) / 3.14159;
+        gy = (((float)raw_gy) * 0.0001 * 180) / 3.14159;
+        gz = (((float)raw_gz) * 0.0001 * 180) / 3.14159;
+
+        thread_sleep_for(1);
+
+        filtered_angle_x = complementaryFilter(gx, filtered_angle_x, alpha);
+        filtered_angle_y = complementaryFilter(gy, filtered_angle_y, alpha);
+        filtered_angle_z = complementaryFilter(gz, filtered_angle_z, alpha);
+
+        compare_sequence_x[compare_length] = filtered_angle_x;
+        compare_sequence_y[compare_length] = filtered_angle_y;
+        compare_sequence_z[compare_length] = filtered_angle_z;
+
+        compare_length++;
     }
 
-    thread_sleep_for(1); 
-  
-  }
+    dtw_distance_x = dtw(sequence_x, compare_sequence_x, seq_length);
+    dtw_distance_y = dtw(sequence_y, compare_sequence_y, seq_length);
+    dtw_distance_z = dtw(sequence_z, compare_sequence_z, seq_length);
+    mutex.unlock();
 
+    // printf("d|\tgx: %4.5f \t gy: %4.5f \t gz: %4.5f\n", dtw_distance_x , dtw_distance_y, dtw_distance_z);
+    // Now you can use dtw_distance_x, dtw_distance_y, and dtw_distance_z for your comparison
+}
+bool isSimilar()
+{
+    if (dtw_distance_x < DTW_THRESHOLD && dtw_distance_y < DTW_THRESHOLD && dtw_distance_z < DTW_THRESHOLD)
+    {
+        return true; // The sequences are similar
+    }
+    else
+    {
+        return false; // The sequences are not similar
+    }
+}
+void startRecording()
+{    
+     recMutex.lock();
+    isRecording = false;
+    isReading = false;
+    stop = false;
+    record = true;
+    complete = false;
+
+    greenLed = 1; // Turn on green LED
+    redLed = 0;
+     recMutex.unlock();
+}
+
+void stopRecording()
+{
+    stopMutex.lock();
+    isRecording = false;
+    isReading = true;
+    stop = false;
+    record = false;
+
+    greenLed = 0; // Turn off green LED
+    redLed = 0;
+     stopMutex.unlock();
+}
+
+void startReading()
+{
+   readMutex.lock();
+    isReading = false;
+    isRecording = false;
+    stop = true;
+    compare = true;
+
+    greenLed = 0; // Turn off green LED
+    redLed = 1;   // Turn on red LED
+    readMutex.unlock();
+}
+
+void stopReading()
+{
+     completeMutex.lock();
+    isReading = false;
+    isRecording = true;
+    stop = false;
+    compare = false;
+    complete = true;
+
+    greenLed = 0; // Turn off green LED
+    redLed = 0;   // Turn off red LED
+     completeMutex.unlock();
+}
+
+void buttonPressedISR()
+{
+    // Set a flag to signal that the button has been pressed
+    buttonPressFlag.set(1);
+}
+
+void buttonWorkerThread()
+{
+    // button.fall(NULL);  // Disable further interrupts until button is released
+
+    while (true)
+    {
+        
+        // Wait for the button press flag to be set
+        buttonPressFlag.wait_any(1);
+         
+
+        mutex.lock();
+
+        if (button.read())
+        {
+
+            if (isRecording && !isReading && !stop)
+                startRecording(); // Start recording hand gesture
+
+            else if (!isRecording && !isReading && !stop)
+                stopRecording(); // done recording hand gesture
+
+            else if (!isRecording && isReading && !stop)
+                startReading(); //  read hand gesture
+
+            else if (!isRecording && !isReading && stop)
+                stopReading(); //  done reading hand gesture
+        }
+        mutex.unlock();
+    }
+}
+
+int main()
+{
+
+    setupGyro();
+     // Set up the ISR
+    button.rise(&buttonPressedISR);
+    thread_sleep_for(0.1);
+
+     // Start the worker thread
+    Thread workerThread;
+    workerThread.start(buttonWorkerThread);
+
+
+    while (1)
+    {
+
+        if (record)
+        {
+            recordGesture();
+        }
+        else if (compare)
+        {
+            compareGesture();
+        }
+        else if (complete)
+        {
+
+            bool isGesture = isSimilar();
+            if (isGesture)
+            {
+                printf("Gesture detected\n");
+            }
+            else
+            {
+                printf("Gesture Not detected\n");
+            }
+            complete = false;
+        }
+    }
 }
