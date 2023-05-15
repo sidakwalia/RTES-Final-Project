@@ -147,6 +147,7 @@ void data_cb() {
 void processMeasurement(Mode current_mode, bool &gesture_match) {
 
   int32_t positive_window_base = max(static_cast<int32_t>(0), static_cast<int32_t>(data.positive_delta_index - POSITIVE_DELTA_WINDOW_SIZE + 1));
+  int32_t current_window_size = data.positive_delta_index - positive_window_base;
 
   int32_t count_x = 0;
   int32_t count_y = 0;
@@ -164,9 +165,9 @@ void processMeasurement(Mode current_mode, bool &gesture_match) {
   bool filtered_positive_delta_y = true;
   bool filtered_positive_delta_z = true;
 
-  if (count_x < (POSITIVE_DELTA_WINDOW_SIZE / 2)) filtered_positive_delta_x = false; 
-  if (count_y < (POSITIVE_DELTA_WINDOW_SIZE / 2)) filtered_positive_delta_y = false; 
-  if (count_z < (POSITIVE_DELTA_WINDOW_SIZE / 2)) filtered_positive_delta_z = false; 
+  if (count_x < (current_window_size / 2)) filtered_positive_delta_x = false; 
+  if (count_y < (current_window_size / 2)) filtered_positive_delta_y = false; 
+  if (count_z < (current_window_size / 2)) filtered_positive_delta_z = false; 
 
   bool compare_axis_deltas_x = false;
   bool compare_axis_deltas_y = false;
