@@ -110,12 +110,12 @@ void startRecording() {
      recMutex.lock();
 
     // Set the flags to indicate that the system is in a recording state.
-    system_flags.isRecording = 0;
-    system_flags.isReading=0;
-    system_flags.stop=0;
-    system_flags.complete=0;
-    system_flags.record=1;
-    system_flags.compare=0;
+    system_flags.isRecording = false;
+    system_flags.isReading=false;
+    system_flags.stop=false;
+    system_flags.complete=false;
+    system_flags.record= true;
+    system_flags.compare=false;
 
     greenLed = 1; // Turn on green LED to indicate recording.
     redLed = 0;  // Unlock the mutex so that other threads can access system_flags.
@@ -131,12 +131,12 @@ void stopRecording()
     stopMutex.lock(); 
 
   // Set the flags to indicate that the system is in a stop recording state.
-    system_flags.isRecording = 0;
-    system_flags.isReading= 1;
-    system_flags.stop= 0;
-    system_flags.complete= 0;
-    system_flags.record= 0;
-    system_flags.compare=0;
+    system_flags.isRecording = false;
+    system_flags.isReading= true;
+    system_flags.stop= false;
+    system_flags.complete= false;
+    system_flags.record= false;
+    system_flags.compare=false;
 
     greenLed = 0; // Turn off green LED.
     redLed = 0;   // Turn off red LED.
@@ -151,12 +151,12 @@ void startReading()
    readMutex.lock();
 
  // Set the flags to indicate that the system is in a reading state.
-    system_flags.isRecording = 0;
-    system_flags.isReading=0;
-    system_flags.stop=1;
-    system_flags.complete=0;
-    system_flags.record=0;
-    system_flags.compare=1;
+    system_flags.isRecording = false;
+    system_flags.isReading=false;
+    system_flags.stop=true;
+    system_flags.complete=false;
+    system_flags.record=false;
+    system_flags.compare=true;
 
     greenLed = 0; // Turn off green LED
     redLed = 1;   // Turn on red LED to indicate reading.
@@ -168,11 +168,11 @@ void stopReading()
 {
      completeMutex.lock();
 
-    system_flags.isRecording = 1;
-    system_flags.isReading=0;
-    system_flags.stop=0;
-    system_flags.complete=1;
-    system_flags.record=0;
+    system_flags.isRecording = true;
+    system_flags.isReading=false;
+    system_flags.stop=false;
+    system_flags.complete=true;
+    system_flags.compare=false;
 
     greenLed = 0; // Turn off green LED
     redLed = 0;   // Turn off red LED
@@ -224,7 +224,14 @@ void buttonWorkerThread()
 
 int main()
 {
-    system_flags.isRecording = 1; // Set the initial system state to be recording.
+    // system_flags.isRecording = true; // Set the initial system state to be recording.
+
+    system_flags.isRecording = true;
+    system_flags.isReading = false;
+    system_flags.stop = false;
+    system_flags.complete = false;
+    system_flags.record = false;
+    system_flags.compare =false;
 
     setupGyro(); // Set up the gyroscope.
 
@@ -241,12 +248,15 @@ int main()
 
         // Check the current system state and take the appropriate action.
          
-         if (system_flags.record)  recordGesture();        // Record a hand gesture.
+         if (system_flags.record) {
+            recordGesture();        // Record a hand gesture.
+         } 
          
-         else if (system_flags.compare) compareGesture();  // Compare the recorded gesture with the stored gesture.
-         
+         else if (system_flags.compare) {
+             compareGesture();  // Compare the recorded gesture with the stored gesture.
+         }
          else if (system_flags.complete){
-           
+              
          // Check if the recorded gesture is similar to the stored gesture.
             bool isGesture = isSimilar(); 
             
