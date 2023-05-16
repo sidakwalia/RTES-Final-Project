@@ -12,9 +12,6 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <stdbool.h>
-
-
 //------------------------------------ Configuration Registers ------------------------------------
 
 /**
@@ -27,6 +24,7 @@
 #define CTRL_REG1 0x20
 #define CTRL_REG1_CONFIG 0b01'10'1'1'1'1
 
+#include <stdbool.h>
 
 /*
   * READY Inturrput configuration
@@ -72,11 +70,11 @@
 */ 
 #define SCALING_FACTOR (17.5f / 1000.0f)
 
-// MAX_SEQUENCE_LENGTH is the maximum length of the gesture sequence that can be recorded and analyzed. 
+// the maximum length of the gesture sequence that can be recorded and analyzed. 
 #define MAX_SEQUENCE_LENGTH 100
 
  /**
-  * DTW_THRESHOLD is the threshold used in the dynamic time warping algorithm (DTW). 
+  * the threshold used in the dynamic time warping algorithm (DTW). 
   * If the DTW distance between the recorded gesture and a pre-recorded gesture is less than this 
     threshold, it is considered a match. This value can be tuned to adjust the sensitivity of the 
     gesture recognition.
@@ -129,11 +127,24 @@ typedef struct {
  */
 typedef struct {
     float sequence[MAX_SEQUENCE_LENGTH];
-    float compare_sequence[MAX_SEQUENCE_LENGTH];
-    float dtw_distance;
     float filtered_angle;
 } AxisData;
 
+enum Mode {
 
+  RECORD = 1,
+  UNLOCK
+
+};
+
+typedef struct {
+
+  float x;
+  float y;
+  float z;
+
+} DtwDistance;
+
+bool gesture_match = true;
 
 #endif // CONFIG_H

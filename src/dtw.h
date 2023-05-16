@@ -26,24 +26,13 @@ float dtw_matrix[MAX_SEQUENCE_LENGTH][MAX_SEQUENCE_LENGTH];
 
 // Function prototype declarations
 float getMinimumOfThree(float num1, float num2, float num3);
-float calculateEuclideanDistance(float point1, float point2);
+float getCost(float point1, float point2);
 float performDTW(float *sequence1, float *sequence2, int sequenceLength);
 
-
-// Function to return the minimum of three floating-point numbers
-float getMinimumOfThree(float num1, float num2, float num3){
-    float minimumValue = num1;
-
-    if (num2 < minimumValue)
-        minimumValue = num2;
-    if (num3 < minimumValue)
-        minimumValue = num3;
-
-    return minimumValue;
-}
-
-// Function to calculate the Euclidean distance between two points in one-dimensional space
-float calculateEuclideanDistance(float point1, float point2)
+/**
+ * Returns euclidean distance between two points
+ */
+float getCost(float point1, float point2)
 {
     return sqrtf(powf(point1 - point2, 2));
 }
@@ -51,22 +40,22 @@ float calculateEuclideanDistance(float point1, float point2)
 /**
  * @brief Function to perform the Dynamic Time Warping (DTW) algorithm on two input sequences
  * DTW is an algorithm used for measuring similarity between two temporal sequences.
+ * 
  * @param sequence1 The first sequence to be compared
  * @param sequence2 The second sequence to be compared
  * @param sequenceLength The length of the sequences
+ * 
  * @return float The Dynamic Time Warping distance between the two sequences
  */
 float DTW(float *sequence1, float *sequence2, int sequenceLength)
 {
-    // Lock the mutex to ensure safe access to the shared resources
-    mutex.lock();
 
    // Initialize all elements of the DTW matrix to the maximum possible float value
     for (int i = 0; i < sequenceLength; i++)
     {
         for (int j = 0; j < sequenceLength; j++)
         {
-            dtw_matrix[i][j] = FLT_MAX;
+            dtw_matrix[i][j] = numeric_limits<float>::max();
         }
     }
 
@@ -77,17 +66,15 @@ float DTW(float *sequence1, float *sequence2, int sequenceLength)
     {
         for (int j = 1; j < sequenceLength; j++)
         {
-            float cost = calculateEuclideanDistance(sequence1[i], sequence2[j]);
-            dtw_matrix[i][j] = cost + getMinimumOfThree(dtw_matrix[i - 1][j],
-                                                         dtw_matrix[i][j - 1],
-                                                         dtw_matrix[i - 1][j - 1]);
+
+            dtw_matrix[i][j] = getCost(sequence1[i], sequence2[j]) + min(min(dtw_matrix[i - 1][j], dtw_matrix[i][j - 1]), 
+                                                                         dtw_matrix[i - 1][j - 1]);
+
         }
     }
 
-    mutex.unlock(); // Unlock the mutex to allow other threads to access the shared resources
+    return dtw_matrix[sequenceLength - 1][sequenceLength - 1];  // total DTW distance
 
-   // Return the bottom-right value of the DTW matrix which is the total DTW distance
-    return dtw_matrix[sequenceLength - 1][sequenceLength - 1];
 }
 
 

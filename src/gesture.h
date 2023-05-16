@@ -20,7 +20,10 @@
 extern volatile SystemFlags system_flags;
 
 // Data for each axis of the gyroscope
-AxisData gyroXdata, gyroYdata, gyroZdata;
+AxisData record_gyro_x_data, record_gyro_y_data, record_gyro_z_data;
+AxisData unlock_gyro_x_data, unlock_gyro_y_data, unlock_gyro_z_data;
+
+DtwDistance dtw_distance;
 
 // Length of the recorded sequence
 int seq_length = 0;
@@ -34,17 +37,18 @@ void recordGesture();
 void compareGesture();
 
 
-
 /**
  * @brief Function to apply the complementary filter equation
+ * 
  * @param gyro_value The gyroscope data
  * @param accel_angle The accelerometer angle
  * @param alpha The filter coefficient
+ * 
  * @return float The filtered angle
  */
-float complementaryFilter(float gyro_value, float accel_angle, float alpha)
+void complementaryFilter(float gyro_value, float accel_angle)
 {
-    return alpha * gyro_value + (1 - alpha) * accel_angle;
+    accel_angle = ALPHA * gyro_value + (1 - ALPHA) * accel_angle;
 }
 
 
@@ -53,114 +57,79 @@ float complementaryFilter(float gyro_value, float accel_angle, float alpha)
  * This function reads the data from the gyroscope, applies the complementary filter to the raw data,
  * and stores the filtered data in a sequence.
  */
-void recordGesture() {
-
-    mutex.lock();
+void readGesture(Mode current_mode) {
 
     int16_t raw_gx, raw_gy, raw_gz;
     float gx, gy, gz;
 
     write_buf[0] = OUT_X_L | 0x80 | 0x40;
 
-    while (system_flags.record && seq_length < MAX_SEQUENCE_LENGTH)
-    {
+    int current_seq_length = 0;
 
-        flags.wait_all(DATA_READY_FLAG);
-        spi.transfer(write_buf, 7, read_buf, 7, spi_cb, SPI_EVENT_COMPLETE);
-        flags.wait_all(SPI_FLAG);
+    AxisData *gyro_x_data;
+    AxisData *gyro_y_data;
+    AxisData *gyro_z_data;
 
-        raw_gx = (((uint16_t)read_buf[2]) << 8) | ((uint16_t)read_buf[1]);
-        raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
-        raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
+    if (current_mode == Mode::RECORD) {
 
-        gx = (((float)raw_gx) * 0.0001 * 180) / 3.14159;
-        gy = (((float)raw_gy) * 0.0001 * 180) / 3.14159;
-        gz = (((float)raw_gz) * 0.0001 * 180) / 3.14159;
+        gyro_x_data = &record_gyro_x_data;
+        gyro_y_data = &record_gyro_y_data;
+        gyro_z_data = &record_gyro_z_data;
 
-        gyroXdata.filtered_angle = complementaryFilter(gx, gyroXdata.filtered_angle, ALPHA);
-        gyroYdata.filtered_angle= complementaryFilter(gy,  gyroYdata.filtered_angle, ALPHA);
-        gyroZdata.filtered_angle = complementaryFilter(gz,  gyroZdata.filtered_angle , ALPHA);
+    } else {
 
-        gyroXdata.sequence[seq_length] =  gyroXdata.filtered_angle;
-        gyroYdata.sequence[seq_length] =  gyroYdata.filtered_angle;
-        gyroZdata.sequence[seq_length] = gyroZdata.filtered_angle;
-
-        seq_length++;
+        gyro_x_data = &unlock_gyro_x_data;
+        gyro_y_data = &unlock_gyro_y_data;
+        gyro_z_data = &unlock_gyro_z_data;
 
     }
-}
 
-/**
- * @brief Function to compare a gesture
- * This function reads the data from the gyroscope, applies the complementary filter to the raw data,
- * and stores the filtered data in a sequence to compare with a previously recorded gesture.
- * Then it uses the Dynamic Time Warping (DTW) algorithm to calculate the similarity between the recorded and the compared sequences.
- */
-void compareGesture(){
-
-    mutex.lock();
-
-    int16_t raw_gx, raw_gy, raw_gz;
-    float gx, gy, gz;
-
-    write_buf[0] = OUT_X_L | 0x80 | 0x40;
-
-    compare_length = 0;
-
-    while (system_flags.compare && compare_length < MAX_SEQUENCE_LENGTH)
-    {
-        flags.wait_all(DATA_READY_FLAG);
-        spi.transfer(write_buf, 7, read_buf, 7, spi_cb, SPI_EVENT_COMPLETE);
-        flags.wait_all(SPI_FLAG);
-
-        raw_gx = (((uint16_t)read_buf[2]) << 8) | ((uint16_t)read_buf[1]);
-        raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
-        raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
-
-        gx = (((float)raw_gx) * 0.0001 * 180) / 3.14159;
-        gy = (((float)raw_gy) * 0.0001 * 180) / 3.14159;
-        gz = (((float)raw_gz) * 0.0001 * 180) / 3.14159;
-
-        gyroXdata.filtered_angle = complementaryFilter(gx, gyroXdata.filtered_angle, ALPHA);
-        gyroYdata.filtered_angle= complementaryFilter(gy,  gyroYdata.filtered_angle, ALPHA);
-        gyroZdata.filtered_angle = complementaryFilter(gz,  gyroZdata.filtered_angle , ALPHA);
-
-       gyroXdata.compare_sequence[compare_length] = gyroXdata.filtered_angle;
-       gyroYdata.compare_sequence[compare_length] =  gyroYdata.filtered_angle;
-       gyroZdata.compare_sequence[compare_length] = gyroZdata.filtered_angle;
-
-        compare_length++;
-    }
-
-    gyroXdata.dtw_distance= abs(DTW(gyroXdata.sequence, gyroXdata.sequence, seq_length));
-    gyroYdata.dtw_distance= abs(DTW(gyroYdata.sequence, gyroYdata.compare_sequence, seq_length));
-    gyroZdata.dtw_distance = abs(DTW(gyroZdata.sequence, gyroZdata.compare_sequence, seq_length));
+    gyro_x_data->filtered_angle = 0;
+    gyro_y_data->filtered_angle = 0;
+    gyro_z_data->filtered_angle = 0;
     
-    mutex.unlock();
+    while (system_flags.record && current_seq_length < MAX_SEQUENCE_LENGTH)
+    {
+
+        flags.wait_all(DATA_READY_FLAG);
+        spi.transfer(write_buf, 7, read_buf, 7, spi_cb, SPI_EVENT_COMPLETE);
+        flags.wait_all(SPI_FLAG);
+
+        raw_gx = (((uint16_t)read_buf[2]) << 8) | ((uint16_t)read_buf[1]);
+        raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
+        raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
+
+        gx = (((float)raw_gx) * SCALING_FACTOR);
+        gy = (((float)raw_gy) * SCALING_FACTOR);
+        gz = (((float)raw_gz) * SCALING_FACTOR);
+
+        complementaryFilter(gx, gyro_x_data->filtered_angle);
+        complementaryFilter(gy, gyro_y_data->filtered_angle);
+        complementaryFilter(gz, gyro_z_data->filtered_angle);
+
+        gyro_x_data->sequence[seq_length] = gyro_x_data->filtered_angle;
+        gyro_y_data->sequence[seq_length] = gyro_y_data->filtered_angle;
+        gyro_z_data->sequence[seq_length] = gyro_z_data->filtered_angle;
+
+        current_seq_length++;
+
+    }
+
+    if (current_mode == Mode::UNLOCK) {
+
+        dtw_distance.x = abs(DTW(record_gyro_x_data.sequence, unlock_gyro_x_data.sequence, seq_length));
+        dtw_distance.y = abs(DTW(record_gyro_y_data.sequence, unlock_gyro_y_data.sequence, seq_length));
+        dtw_distance.z = abs(DTW(record_gyro_x_data.sequence, unlock_gyro_x_data.sequence, seq_length));
+
+        gesture_match = dtw_distance.x < DTW_THRESHOLD && dtw_distance.y < DTW_THRESHOLD && dtw_distance.z < DTW_THRESHOLD;
+
+    } else {
+
+        seq_length = current_seq_length;
+
+    }
 
 }
-
-/**
- * @brief Function to determine whether two sequences are similar based on the DTW distances
- * @return bool True if the sequences are similar, false otherwise
- */
-bool isSimilar(){
-   
-    // printf("dtw_distance_x %f\n", dtw_distance_x);
-    // printf("dtw_distance_y %f\n", dtw_distance_y);
-    // printf("dtw_distance_z %f\n", dtw_distance_z);
-
-    if (gyroXdata.dtw_distance < DTW_THRESHOLD && gyroYdata.dtw_distance < DTW_THRESHOLD && gyroZdata.dtw_distance < DTW_THRESHOLD)
-    {
-        return true; // The sequences are similar
-    }
-    else
-    {
-        return false; // The sequences are not similar
-    }
-}
-
-
 
 
 #endif // GESTURE_H
