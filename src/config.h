@@ -12,6 +12,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stdbool.h>
+
 
 //------------------------------------ Configuration Registers ------------------------------------
 
@@ -104,12 +106,12 @@
  * complete: Indicates whether the gesture comparison is complete.
  */
 typedef struct {
-    unsigned char isRecording : 1;
-    unsigned char isReading : 1;
-    unsigned char stop : 1;
-    unsigned char record : 1;
-    unsigned char ompare : 1;
-    unsigned char omplete : 1;
+    bool isRecording;
+    bool isReading;
+    bool stop;
+    bool record;
+    bool compare;
+    bool complete;
 } SystemFlags;
 
 /**
