@@ -38,7 +38,7 @@
 
 #define SCALING_FACTOR (17.5f * 0.017453292519943295769236907684886f / 1000.0f)
 #define MAX_SEQUENCE_LENGTH 100
-#define DTW_THRESHOLD 0
+#define DTW_THRESHOLD 2
 
 rtos::Mutex mutex;
 Mutex recMutex;
@@ -51,7 +51,7 @@ float dtw_matrix[MAX_SEQUENCE_LENGTH][MAX_SEQUENCE_LENGTH];
 float sequence_x[MAX_SEQUENCE_LENGTH];
 float sequence_y[MAX_SEQUENCE_LENGTH];
 float sequence_z[MAX_SEQUENCE_LENGTH];
-int seq_length = 0;
+int seq_length = 0.5;
 
 float alpha = 0.75f; // Filter coefficient
 
@@ -76,7 +76,6 @@ EventFlags flags;
 
 volatile bool isRecording = true;
 volatile bool isReading = false;
-
 volatile bool stop = false;
 volatile bool record = false;
 volatile bool compare = false;
@@ -92,6 +91,7 @@ float filtered_angle_z = 0.0f;
  */
 void spi_cb(int event)
 {
+
     flags.set(SPI_FLAG);
 };
 
@@ -100,6 +100,7 @@ void spi_cb(int event)
  */
 void data_cb()
 {
+
     flags.set(DATA_READY_FLAG);
 };
 
@@ -167,6 +168,7 @@ float euclidean_distance(float a, float b)
 
 float dtw(float *s, float *t, int len)
 {
+    mutex.lock();
     for (int i = 0; i < len; i++)
     {
         for (int j = 0; j < len; j++)
@@ -187,7 +189,7 @@ float dtw(float *s, float *t, int len)
                                           dtw_matrix[i - 1][j - 1]);
         }
     }
-
+     mutex.unlock();
     return dtw_matrix[len - 1][len - 1];
 }
 
@@ -209,9 +211,13 @@ void recordGesture()
         raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
         raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
 
-        gx = (((float)raw_gx) * 0.0001);
-        gy = (((float)raw_gy) * 0.0001);
-        gz = (((float)raw_gz) * 0.0001);
+        gx = (((float)raw_gx) * 0.0001 * 180) / 3.14159;
+        gy = (((float)raw_gy) * 0.0001 * 180) / 3.14159;
+        gz = (((float)raw_gz) * 0.0001 * 180) / 3.14159;
+
+        // gx = ((float)raw_gx) * 0.0001;
+        // gy = ((float)raw_gy) * 0.0001;
+        // gz = ((float)raw_gz) * 0.0001;
 
         // thread_sleep_for(1);
 
@@ -242,6 +248,7 @@ float dtw_distance_z;
 
 void compareGesture()
 {
+     mutex.lock();
     write_buf[0] = OUT_X_L | 0x80 | 0x40;
     int compare_length = 0;
 
@@ -255,9 +262,14 @@ void compareGesture()
         raw_gy = (((uint16_t)read_buf[4]) << 8) | ((uint16_t)read_buf[3]);
         raw_gz = (((uint16_t)read_buf[6]) << 8) | ((uint16_t)read_buf[5]);
 
-        gx = (((float)raw_gx) * 0.0001);
-        gy = (((float)raw_gy) * 0.0001);
-        gz = (((float)raw_gz) * 0.0001);
+        gx = (((float)raw_gx) * 0.0001 * 180) / 3.14159;
+        gy = (((float)raw_gy) * 0.0001 * 180) / 3.14159;
+        gz = (((float)raw_gz) * 0.0001 * 180) / 3.14159;
+
+        // gx = ((float)raw_gx) * 0.0001;
+        // gy = ((float)raw_gy) * 0.0001;
+        // gz = ((float)raw_gz) * 0.0001;
+
 
         // thread_sleep_for(1);
 
@@ -272,15 +284,20 @@ void compareGesture()
         compare_length++;
     }
 
-    dtw_distance_x = dtw(sequence_x, compare_sequence_x, seq_length);
-    dtw_distance_y = dtw(sequence_y, compare_sequence_y, seq_length);
-    dtw_distance_z = dtw(sequence_z, compare_sequence_z, seq_length);
+    dtw_distance_x = abs(dtw(sequence_x, compare_sequence_x, seq_length));
+    dtw_distance_y = abs(dtw(sequence_y, compare_sequence_y, seq_length));
+    dtw_distance_z = abs(dtw(sequence_z, compare_sequence_z, seq_length));
+    mutex.unlock();
 
     // printf("d|\tgx: %4.5f \t gy: %4.5f \t gz: %4.5f\n", dtw_distance_x , dtw_distance_y, dtw_distance_z);
     // Now you can use dtw_distance_x, dtw_distance_y, and dtw_distance_z for your comparison
 }
 bool isSimilar()
 {
+    printf("dtw_distance_x %f\n", dtw_distance_x);
+    printf("dtw_distance_y %f\n", dtw_distance_y);
+    printf("dtw_distance_z %f\n", dtw_distance_z);
+
     if (dtw_distance_x < DTW_THRESHOLD && dtw_distance_y < DTW_THRESHOLD && dtw_distance_z < DTW_THRESHOLD)
     {
         return true; // The sequences are similar
@@ -356,26 +373,32 @@ void buttonWorkerThread()
 
     while (true)
     {
+        
         // Wait for the button press flag to be set
+        buttonPressFlag.wait_any(1);
+         
 
-      buttonPressFlag.wait_any(1);
+        mutex.lock();
 
-      if (button.read())
-      {
+         // Reset the button press flag
+         buttonPressFlag.clear(1);
 
-          if (isRecording && !isReading && !stop)
-              startRecording(); // Start recording hand gesture
+        if (button.read())
+        {
 
-          else if (!isRecording && !isReading && !stop)
-              stopRecording(); // done recording hand gesture
+            if (isRecording && !isReading && !stop)
+                startRecording(); // Start recording hand gesture
 
-          else if (!isRecording && isReading && !stop)
-              startReading(); //  read hand gesture
+            else if (!isRecording && !isReading && !stop)
+                stopRecording(); // done recording hand gesture
 
-          else if (!isRecording && !isReading && stop)
-              stopReading(); //  done reading hand gesture
-      }
+            else if (!isRecording && isReading && !stop)
+                startReading(); //  read hand gesture
 
+            else if (!isRecording && !isReading && stop)
+                stopReading(); //  done reading hand gesture
+        }
+        mutex.unlock();
     }
 }
 
@@ -390,6 +413,7 @@ int main()
      // Start the worker thread
     Thread workerThread;
     workerThread.start(buttonWorkerThread);
+
 
     while (1)
     {
@@ -406,7 +430,6 @@ int main()
         {
 
             bool isGesture = isSimilar();
-
             if (isGesture)
             {
                 printf("Gesture detected\n");
