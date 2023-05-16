@@ -301,7 +301,6 @@ void processMeasurement(Mode current_mode, bool &gesture_match) {
 
   // ++data.filtered_positive_delta_index;
 
-
 }
 
 void readGyro(Mode current_mode) {
@@ -401,11 +400,11 @@ void readGyro(Mode current_mode) {
       
     }
 
-    for (int i = 0; i < SENSING_TIMEFRAME; ++i) {
+    // for (int i = 0; i < SENSING_TIMEFRAME; ++i) {
 
-      if (i < recorded_gesture.next_index) std::cout << recorded_gesture.axis[i] << ", " << recorded_gesture.angle_change[i] << std::endl;
+    //   if (i < recorded_gesture.next_index) std::cout << recorded_gesture.axis[i] << ", " << recorded_gesture.angle_change[i] << std::endl;
 
-    }
+    // }
 
     led1 = 0;
     led2 = 0;
@@ -418,7 +417,7 @@ void readGyro(Mode current_mode) {
     led1 = 0;
     led2 = 0;
 
-    std::cout << "DONE" << std::endl;
+    // std::cout << "DONE" << std::endl;
 
     // t1.stop();
     // std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(t1.elapsed_time()).count() << std::endl;
@@ -476,7 +475,6 @@ void blinkMode(Mode current_mode) {
   reading_led_indicator_thread.start(blinkLEDs);
 
 }
-
 
 int main() {
 
@@ -537,7 +535,7 @@ int main() {
       // Button is being held down
       button_hold_time++;
 
-      if (button_hold_time >= 2*1000) {
+      if (button_hold_time >= 2000) {
         
         blinkMode(Mode::RECORD);
         readGyro(Mode::RECORD);
@@ -550,7 +548,7 @@ int main() {
     } else if (current_state == false && button_pressed == true) {
       
       // Button was just released
-      if (button_hold_time < 2*1000) {
+      if (button_hold_time < 2000) {
         
         blinkMode(Mode::UNLOCK);//unlock mode
         readGyro(Mode::UNLOCK);
