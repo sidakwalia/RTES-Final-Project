@@ -1,3 +1,55 @@
+/**
+ * @file main.cpp
+ * @author  Group 12 : Jack Shkifati, Ishan U Taldekar, James Huang, and Inder Preet Walia
+ * @brief 
+ * 
+ * Overview:
+ * This program is designed to read data from a gyroscope, interpret it as hand gestures, and act upon 
+ * these gestures. It features two modes: the RECORD mode, where it learns a new gesture, and the 
+ * UNLOCK mode, where it attempts to recognize a gesture. These modes can be switched between by 
+ * pressing a button.
+ * 
+ * Functions:
+ * 1.readGyro(Mode current_mode): This function reads raw data from a gyroscope sensor and converts 
+ * it into angles. In RECORD mode, the function collects data and stores it as a new gesture. In 
+ * UNLOCK mode, the function tries to match the input gesture with the stored gesture. If the input 
+ * gesture matches the stored gesture, it turns on LED1. If not, it turns on LED2.
+ * 
+ * 2. processMeasurement(current_mode, gesture_match): This function is essential for the operation of 
+ * the system. Presumably, it processes the new measurements from the gyroscope, comparing them with the 
+ * stored gesture in UNLOCK mode or storing them as a new gesture in RECORD mode.
+ * 
+ * 3. blinkLEDs(): This function provides visual feedback to the user by blinking LEDs while the system 
+ * is reading and processing gyroscope data. It is meant to indicate that the system is actively working 
+ * on a task.
+ * 
+ * 4. blinkMode(Mode current_mode): This function provides visual feedback about the current operating 
+ * mode of the system. In RECORD mode, the LED stays on for 3 seconds. In UNLOCK mode, the LED blinks 
+ * three times. This function also starts the blinkLEDs() function in a new thread to give continuous 
+ * feedback during the reading process.
+ * 
+ * 5. main(): This function is the entry point of the program. It sets up SPI communication and configures 
+ * the gyroscope sensor. It also implements a loop that constantly checks the state of the button to switch
+ * modes or start reading from the gyroscope. The function also handles button debouncing logic.
+ * 
+ * Usage:
+ * 
+ * 1. Start the program. The system will be in an idle state.
+ * 
+ * 2. Press and hold the button for 2 seconds. The LED will light up indicating that the system has 
+ * entered RECORD mode.
+ * 
+ * 3. Release the button to leave RECORD mode. The recorded gesture will be stored.
+ * 
+ * 4. Press and release the button quickly (less than 2 seconds). The LED will blink indicating that the 
+ * system is now in UNLOCK mode.
+ * 
+ * 5. Perform the gesture that you want the system to recognize. If the gesture matches the stored gesture, 
+ * LED1 will light up. If not, LED2 will light up.
+ * 
+ * @version 0.1
+ */
+
 #include "mbed.h"
 #include "AccurateWaiter.h"
 #include "drivers/LCD_DISCO_F429ZI.h"
