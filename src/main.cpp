@@ -18,7 +18,7 @@ DigitalOut led2(LED2);
 bool button_pressed = false;  // button state
 int button_hold_time = 0;  // button time
 
-bool lcd_backgroun_white = true;
+int32_t square_y_pos[5] = {220, 173, 126, 75, 30};
 
 #define CTRL_REG1 0x20  // register fields(bits): data_rate(2),Bandwidth(2),Power_down(1),Zen(1),Yen(1),Xen(1)
 
@@ -63,6 +63,18 @@ enum Mode {
   UNLOCK
 
 };
+
+enum Color {
+
+    BLUE = 1,
+    GREEN, 
+    RED
+
+};
+
+Color background_color = Color::BLUE;
+
+bool reading_state = false;
 
 #define SENSING_TIMEFRAME 100  // number of seconds that gyroscope will sense gesture: 100 -> 5 seconds, 200 -> 10 seconds, ...
 const int32_t STABILITY_TIMEFRAME = 5;  // timeframe after which stability of measurement in any axis is gauged + compared about these values
@@ -123,7 +135,7 @@ struct Gesture {  // container for recording gesture as axis of major change and
 };
 
 Gesture recorded_gestures[5];  // gesture stored
-int8_t selected_gesture = 0;
+int8_t selected_user_profile = 0;
 
 LCD_DISCO_F429ZI lcd;
 TS_StateTypeDef ts_state;
@@ -154,6 +166,16 @@ void processMeasurement(Mode current_mode, bool &gesture_match) {
   bool compare_axis_deltas_y = false;
   bool compare_axis_deltas_z = false;
 
+
+  if (current_mode == Mode::UNLOCK && recorded_gestures->next_index == 0) {
+
+        gesture_match = false;
+        return;
+
+  }
+
+  if (!gesture_match) return;
+
   if (abs(data.delta_x) > DELTA_THRESHOLD && ((data.positive_delta_index > 0 && data.positive_delta_x[data.positive_delta_index] != data.positive_delta_x[data.positive_delta_index - 1]) || 
       (data.angles_index >= STABILITY_TIMEFRAME && abs(data.angles_x[data.angles_index - STABILITY_TIMEFRAME] - data.angles_x[data.angles_index]) <= STABILITY_THRESHOLD))) {
 
@@ -181,19 +203,19 @@ void processMeasurement(Mode current_mode, bool &gesture_match) {
 
       if (current_mode == Mode::RECORD) {
 
-        recorded_gestures[selected_gesture].axis[recorded_gestures[selected_gesture].next_index] = Axis::X;
-        recorded_gestures[selected_gesture].angle_change[recorded_gestures[selected_gesture].next_index] = data.delta_x;
-        ++recorded_gestures[selected_gesture].next_index;
+        recorded_gestures[selected_user_profile].axis[recorded_gestures[selected_user_profile].next_index] = Axis::X;
+        recorded_gestures[selected_user_profile].angle_change[recorded_gestures[selected_user_profile].next_index] = data.delta_x;
+        ++recorded_gestures[selected_user_profile].next_index;
 
       } else {
 
-        if (!(recorded_gestures[selected_gesture].axis[recorded_gestures[selected_gesture].compare_index] == Axis::X && abs(recorded_gestures[selected_gesture].angle_change[recorded_gestures[selected_gesture].compare_index] - data.delta_x) <= COMPARE_THRESHOLD)) {
+        if (!(recorded_gestures[selected_user_profile].axis[recorded_gestures[selected_user_profile].compare_index] == Axis::X && abs(recorded_gestures[selected_user_profile].angle_change[recorded_gestures[selected_user_profile].compare_index] - data.delta_x) <= COMPARE_THRESHOLD)) {
 
           gesture_match = false;
 
         }
 
-        ++recorded_gestures[selected_gesture].compare_index;
+        ++recorded_gestures[selected_user_profile].compare_index;
 
       }
 
@@ -211,19 +233,19 @@ void processMeasurement(Mode current_mode, bool &gesture_match) {
 
       if (current_mode == Mode::RECORD) {
 
-        recorded_gestures[selected_gesture].axis[recorded_gestures[selected_gesture].next_index] = Axis::Y;
-        recorded_gestures[selected_gesture].angle_change[recorded_gestures[selected_gesture].next_index] = data.delta_y;
-        ++recorded_gestures[selected_gesture].next_index;
+        recorded_gestures[selected_user_profile].axis[recorded_gestures[selected_user_profile].next_index] = Axis::Y;
+        recorded_gestures[selected_user_profile].angle_change[recorded_gestures[selected_user_profile].next_index] = data.delta_y;
+        ++recorded_gestures[selected_user_profile].next_index;
 
       } else {
 
-        if (!(recorded_gestures[selected_gesture].axis[recorded_gestures[selected_gesture].compare_index] == Axis::Y && abs(recorded_gestures[selected_gesture].angle_change[recorded_gestures[selected_gesture].compare_index] - data.delta_y) <= COMPARE_THRESHOLD)) {
+        if (!(recorded_gestures[selected_user_profile].axis[recorded_gestures[selected_user_profile].compare_index] == Axis::Y && abs(recorded_gestures[selected_user_profile].angle_change[recorded_gestures[selected_user_profile].compare_index] - data.delta_y) <= COMPARE_THRESHOLD)) {
 
           gesture_match = false;
 
         }
 
-        ++recorded_gestures[selected_gesture].compare_index;
+        ++recorded_gestures[selected_user_profile].compare_index;
 
       }
 
@@ -241,19 +263,19 @@ void processMeasurement(Mode current_mode, bool &gesture_match) {
 
       if (current_mode == Mode::RECORD) {
 
-        recorded_gestures[selected_gesture].axis[recorded_gestures[selected_gesture].next_index] = Axis::Z;
-        recorded_gestures[selected_gesture].angle_change[recorded_gestures[selected_gesture].next_index] = data.delta_z;
-        ++recorded_gestures[selected_gesture].next_index;
+        recorded_gestures[selected_user_profile].axis[recorded_gestures[selected_user_profile].next_index] = Axis::Z;
+        recorded_gestures[selected_user_profile].angle_change[recorded_gestures[selected_user_profile].next_index] = data.delta_z;
+        ++recorded_gestures[selected_user_profile].next_index;
 
       } else {
 
-        if (!(recorded_gestures[selected_gesture].axis[recorded_gestures[selected_gesture].compare_index] == Axis::Z && abs(recorded_gestures[selected_gesture].angle_change[recorded_gestures[selected_gesture].compare_index] - data.delta_z) <= COMPARE_THRESHOLD)) {
+        if (!(recorded_gestures[selected_user_profile].axis[recorded_gestures[selected_user_profile].compare_index] == Axis::Z && abs(recorded_gestures[selected_user_profile].angle_change[recorded_gestures[selected_user_profile].compare_index] - data.delta_z) <= COMPARE_THRESHOLD)) {
 
           gesture_match = false;
 
         }
 
-        ++recorded_gestures[selected_gesture].compare_index;
+        ++recorded_gestures[selected_user_profile].compare_index;
 
       }
 
@@ -268,6 +290,11 @@ void processMeasurement(Mode current_mode, bool &gesture_match) {
 }
 
 void readGyro(Mode current_mode) {
+
+    reading_state = true;
+
+    led1 = 1;
+    led2 = 1;
 
     while (button.read()) {  //Start the recording when the pressed button realeased
 
@@ -287,8 +314,8 @@ void readGyro(Mode current_mode) {
     data.positive_delta_index = -1;
     data.angles_index = -1;
     
-    recorded_gestures[selected_gesture].compare_index = 0;
-    recorded_gestures[selected_gesture].next_index = 0;
+    recorded_gestures[selected_user_profile].compare_index = 0;
+    recorded_gestures[selected_user_profile].next_index = 0;
          
     for (int16_t i = 0; i < SENSING_TIMEFRAME; ++i)
     {
@@ -358,20 +385,62 @@ void readGyro(Mode current_mode) {
 
       processMeasurement(current_mode, gesture_match);
       
-      thread_sleep_for(50);
+      // thread_sleep_for(50);
+
+      std::cout << data.angles_x[data.angles_index] << ", " << data.angles_y[data.angles_index] << ", " << data.angles_z[data.angles_index] << std::endl;
       
+    }
+
+    for (int8_t i = 0; i < SENSING_TIMEFRAME; ++i) {
+
+        std::cout << recorded_gestures[selected_user_profile].axis[i] << ", " << recorded_gestures[selected_user_profile].angle_change[i] << std::endl;
+
     }
 
     led1 = 0;
     led2 = 0;
 
-    if (gesture_match) led1 = 1;
-    else led2 = 1;
+    thread_sleep_for(500);
 
-    thread_sleep_for(5000);
+    if (gesture_match && current_mode == Mode::UNLOCK) {
+
+        
+        for (int8_t i = 0; i < 5; ++i) {
+
+            led1 = 1;
+            background_color = Color::GREEN;
+
+            thread_sleep_for(500);
+
+            led1 = 0;
+            background_color = Color::BLUE;
+
+            thread_sleep_for(500); 
+
+        }
+
+    } else if (current_mode == Mode::UNLOCK) {
+        
+        for (int8_t i = 0; i < 5; ++i) {
+
+            led2 = 1;
+            background_color = Color::RED;
+
+            thread_sleep_for(500);
+
+            led2 = 0;
+            background_color = Color::BLUE;
+
+            thread_sleep_for(500); 
+
+        }
+
+    }
 
     led1 = 0;
     led2 = 0;
+
+    reading_state = false;
 
 }
 
@@ -402,23 +471,118 @@ void uiEventsLoop() {
 
     while (true) {
         
-        if (lcd_backgroun_white) lcd.Clear(LCD_COLOR_WHITE);
-        else lcd.Clear(LCD_COLOR_GREEN);
+        if (background_color == Color::BLUE) {
+            
+            lcd.Clear(LCD_COLOR_DARKBLUE);
+            lcd.SetBackColor(LCD_COLOR_DARKBLUE);
 
-        char user_profiles[2] = {'1', NULL};
-
-        for (int8_t i = 5; i >= 1; --i) {
-
-            lcd.DisplayStringAt(0, LINE(i * 3), (uint8_t *)user_profiles, CENTER_MODE);
-            ++user_profiles[i];
+        } else if (background_color == Color::GREEN) {
+            
+            lcd.Clear(LCD_COLOR_GREEN);
+            lcd.SetBackColor(LCD_COLOR_GREEN);
+        
+        } else {
+            
+            lcd.Clear(LCD_COLOR_RED);
+            lcd.SetBackColor(LCD_COLOR_RED);
 
         }
 
-        lcd.DrawRect((selected_gesture + 1) * 3, lcd.GetYSize() / 2, 5, 5);
+        lcd.SetTextColor(LCD_COLOR_WHITE);
 
+        char user_profiles[2] = {'1', NULL};
+        
+        for (int8_t i = 5; i >= 1; --i) {
+
+            lcd.DisplayStringAt(0, LINE(i * 3), (uint8_t *)user_profiles, CENTER_MODE);
+            ++user_profiles[0];
+
+        }
+
+        lcd.DrawRect(90, square_y_pos[selected_user_profile], 50, 50);
         thread_sleep_for(50);
 
     }
+
+}
+
+int32_t getUserProfileNumber(int32_t y) {
+
+    return (y / (lcd.GetYSize() / 5));
+
+}
+
+void lcdInputThread() {
+
+    BSP_TS_Init(lcd.GetXSize(), lcd.GetYSize());
+
+    TS_StateTypeDef ts_state;
+
+    while (1) {
+
+        BSP_TS_GetState(&ts_state);
+
+        if (ts_state.TouchDetected && !reading_state) {
+
+            selected_user_profile = getUserProfileNumber(ts_state.Y);
+            thread_sleep_for(500);
+
+        }
+
+    }
+
+}
+
+void mainBackgroundThread() {
+
+    while (1) {
+    
+        bool current_state = button.read();
+        
+        //Press and hold the button for 2s, green light will on it will get into record mode.
+        //In record mode, press and release, green light off and leave the record mode.
+        //Press and release within 2s, red light will blink, unlock mode on (function needed)
+        if (current_state == true && button_pressed == false) {
+
+            // Button was just pressed
+            button_pressed = true;
+            button_hold_time = 0;
+        
+        }
+
+        else if (current_state == true && button_pressed == true) {
+        
+            // Button is being held down
+            button_hold_time++;
+
+            if (button_hold_time >= 400) {
+                    
+                blinkMode(Mode::RECORD);
+                readGyro(Mode::RECORD);
+
+                led1 = 0;
+                led2 = 0;
+            
+            }
+
+        } else if (current_state == false && button_pressed == true) {
+        
+            // Button was just released
+            if (button_hold_time < 400) {
+                
+                blinkMode(Mode::UNLOCK);//unlock mode
+                readGyro(Mode::UNLOCK);
+
+            }
+
+            button_pressed = false;
+            button_hold_time = 0;
+
+        }
+
+        thread_sleep_for(1); 
+  
+    } 
 
 }
 
@@ -465,53 +629,14 @@ int main() {
   Thread ui_thread;
   ui_thread.start(uiEventsLoop);
 
-  while (1) {
-    
-    bool current_state = button.read();
-    
-    //Press and hold the button for 2s, green light will on it will get into record mode.
-    //In record mode, press and release, green light off and leave the record mode.
-    //Press and release within 2s, red light will blink, unlock mode on (function needed)
-    if (current_state == true && button_pressed == false) {
+  Thread lcd_input_thread;
+  lcd_input_thread.start(lcdInputThread);
 
-      // Button was just pressed
-      button_pressed = true;
-      button_hold_time = 0;
-    
-    }
+  Thread main_thread;
+  main_thread.start(mainBackgroundThread);
 
-    else if (current_state == true && button_pressed == true) {
-      
-      // Button is being held down
-      button_hold_time++;
-
-      if (button_hold_time >= 2*1000) {
-        
-        blinkMode(Mode::RECORD);
-        readGyro(Mode::RECORD);
-
-        led1 = 0;
-        led2 = 0;
-      
-      }
-
-    } else if (current_state == false && button_pressed == true) {
-      
-      // Button was just released
-      if (button_hold_time < 2*1000) {
-        
-        blinkMode(Mode::UNLOCK);//unlock mode
-        readGyro(Mode::UNLOCK);
-
-      }
-
-      button_pressed = false;
-      button_hold_time = 0;
-
-    }
-
-    thread_sleep_for(1); 
-  
-  }
+  main_thread.join();
+  lcd_input_thread.join();
+  ui_thread.join();
 
 }

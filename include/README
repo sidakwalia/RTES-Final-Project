@@ -23,7 +23,7 @@ in only one place. If they need to be changed, they can be changed in one
 place, and programs that include the header file will automatically use the
 new version when next recompiled. The header file eliminates the labor of
 finding and changing all the copies as well as the risk that a failure to
-find one copy will result in inconsistencies within a program.
+find one copy will result in inconsistencies within a programqq.
 
 In C, the usual convention is to give header files names that end with `.h'.
 It is most portable to use only letters, digits, dashes, and underscores in
